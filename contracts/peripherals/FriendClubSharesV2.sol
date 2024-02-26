@@ -35,9 +35,12 @@ contract FriendClubSharesV2 is Context, ReentrancyGuard, Governable {
     uint256 supply,
     SubjectType subjectType,
     uint256 ts,
+    uint256 protocolFee,
+    uint256 subjectFee,
     uint256 totalProtocolFees
   );
   event KeyFixedPriceUpdate(address subject, SubjectType subjectType, uint256 price, uint256 ts);
+  event ClubFeePercentUpdated(address subject, uint256 protocolFeePercent, uint256 subjectFeePercent);
 
   event WishCreated(address wisher, uint256 reservedQuantity);
   event WishBound(address indexed sharesSubject, address indexed wisher);
@@ -231,6 +234,7 @@ contract FriendClubSharesV2 is Context, ReentrancyGuard, Governable {
       sharesFeeInfo[sharesSubject].protocolFeePercent = _protocolFeePercent;
       sharesFeeInfo[sharesSubject].subjectFeePercent = _subjectFeePercent;
     }
+    emit ClubFeePercentUpdated(sharesSubject, _protocolFeePercent, _subjectFeePercent);
   }
 
   function getPrice(address sharesSubject, uint256 supply, uint256 amount) public view virtual returns (uint256) {
@@ -410,28 +414,34 @@ contract FriendClubSharesV2 is Context, ReentrancyGuard, Governable {
     if (wishPasses[sharesSubject].createdAt + WISH_EXPIRATION_TIME < block.timestamp) revert ExpiredWishCanOnlyBeSold();
     wishPasses[sharesSubject].totalSupply += amount;
     wishPasses[sharesSubject].balanceOf[_msgSender()] += amount;
-    wishPasses[sharesSubject].subjectReward += getSubjectFee(sharesSubject, price);
-    wishPasses[sharesSubject].parkedFees += getProtocolFee(sharesSubject, price);
+    uint256 subjFee = getSubjectFee(sharesSubject, price);
+    wishPasses[sharesSubject].subjectReward += subjFee;
+    uint256 protoFee = getProtocolFee(sharesSubject, price);
+    wishPasses[sharesSubject].parkedFees += protoFee;
     uint256 totalProtocolFees = wishPasses[sharesSubject].parkedFees + protocolFees;
-    emit Trade(_msgSender(), sharesSubject, true, amount, price, supply + amount, SubjectType.WISH, block.timestamp, totalProtocolFees);
+    emit Trade(_msgSender(), sharesSubject, true, amount, price, supply + amount, SubjectType.WISH, block.timestamp, protoFee, subjFee, totalProtocolFees);
   }
 
   function _buyBind(address sharesSubject, uint256 supply, uint256 amount, uint256 price) internal {
     address wisher = authorizedWishes[sharesSubject];
     wishPasses[wisher].totalSupply += amount;
     wishPasses[wisher].balanceOf[_msgSender()] += amount;
-    protocolFees += getProtocolFee(sharesSubject, price);
-    emit Trade(_msgSender(), sharesSubject, true, amount, price, supply + amount, SubjectType.BIND, block.timestamp, protocolFees);
-    (bool success, ) = sharesSubject.call{value: getSubjectFee(sharesSubject, price)}("");
+    uint256 protoFee = getProtocolFee(sharesSubject, price);
+    protocolFees += protoFee;
+    uint256 subjFee = getSubjectFee(sharesSubject, price);
+    emit Trade(_msgSender(), sharesSubject, true, amount, price, supply + amount, SubjectType.BIND, block.timestamp, protoFee, subjFee, protocolFees);
+    (bool success, ) = sharesSubject.call{value: subjFee}("");
     if (!success) revert UnableToSendFunds();
   }
 
   function _buyKey(address sharesSubject, uint256 supply, uint256 amount, uint256 price) internal {
     sharesBalance[sharesSubject][_msgSender()] += amount;
     sharesSupply[sharesSubject] += amount;
-    protocolFees += getProtocolFee(sharesSubject, price);
-    emit Trade(_msgSender(), sharesSubject, true, amount, price, supply + amount, SubjectType.KEY, block.timestamp, protocolFees);
-    (bool success, ) = sharesSubject.call{value: getSubjectFee(sharesSubject, price)}("");
+    uint256 protoFee = getProtocolFee(sharesSubject, price);
+    protocolFees += protoFee;
+    uint256 subjFee = getSubjectFee(sharesSubject, price);
+    emit Trade(_msgSender(), sharesSubject, true, amount, price, supply + amount, SubjectType.KEY, block.timestamp, protoFee, subjFee, protocolFees);
+    (bool success, ) = sharesSubject.call{value: subjFee}("");
     if (!success) revert UnableToSendFunds();
   }
 
@@ -500,7 +510,7 @@ contract FriendClubSharesV2 is Context, ReentrancyGuard, Governable {
     }
     
     uint256 totalProtocolFees = wishPasses[sharesSubject].parkedFees + protocolFees;
-    emit Trade(_msgSender(), sharesSubject, false, amount, price, supply - amount, SubjectType.WISH, block.timestamp, totalProtocolFees);
+    emit Trade(_msgSender(), sharesSubject, false, amount, price, supply - amount, SubjectType.WISH, block.timestamp, protocolFee, subjectFee, totalProtocolFees);
   }
 
   function _sellBind(address sharesSubject, uint256 supply, uint256 amount, uint256 price) internal {
@@ -510,7 +520,7 @@ contract FriendClubSharesV2 is Context, ReentrancyGuard, Governable {
     wishPasses[wisher].totalSupply -= amount;
     wishPasses[wisher].balanceOf[_msgSender()] -= amount;
     protocolFees += protocolFee;
-    emit Trade(_msgSender(), sharesSubject, false, amount, price, supply - amount, SubjectType.BIND, block.timestamp, protocolFees);
+    emit Trade(_msgSender(), sharesSubject, false, amount, price, supply - amount, SubjectType.BIND, block.timestamp, protocolFee, subjectFee, protocolFees);
     _sendSellFunds(price, protocolFee, subjectFee, sharesSubject);
   }
 
@@ -520,7 +530,7 @@ contract FriendClubSharesV2 is Context, ReentrancyGuard, Governable {
     sharesBalance[sharesSubject][_msgSender()] -= amount;
     sharesSupply[sharesSubject] -= amount;
     protocolFees += protocolFee;
-    emit Trade(_msgSender(), sharesSubject, false, amount, price, supply - amount, SubjectType.KEY, block.timestamp, protocolFees);
+    emit Trade(_msgSender(), sharesSubject, false, amount, price, supply - amount, SubjectType.KEY, block.timestamp, protocolFee, subjectFee, protocolFees);
     _sendSellFunds(price, protocolFee, subjectFee, sharesSubject);
   }
 
@@ -693,7 +703,7 @@ contract FriendClubSharesV2 is Context, ReentrancyGuard, Governable {
     wishPasses[wisher].balanceOf[sharesSubject] += amount;
     protocolFees += protocolFee;
     uint256 supply = wishPasses[wisher].totalSupply;
-    emit Trade(_msgSender(), sharesSubject, true, amount, price, supply, SubjectType.BIND, block.timestamp, protocolFees);
+    emit Trade(_msgSender(), sharesSubject, true, amount, price, supply, SubjectType.BIND, block.timestamp, protocolFee, 0, protocolFees);
     if (msg.value - (price + protocolFee) > 0) {
       _sendFundsBackIfUnused(msg.value - (price + protocolFee));
     }
